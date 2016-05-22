@@ -1,6 +1,11 @@
 var express = require('express');
 var router = express.Router()
 
+// Game fixed setup. (May eventually be configurable.)
+var NUMBER_OF_PLAYERS = 2;
+var NUMBER_OF_COLORS = 8;
+var NUMBER_OF_SLOTS = 8;
+
 // Game statuses.
 var STATUS_WAITINGP2 = 0;
 var STATUS_ONGOING = 1;
@@ -8,9 +13,17 @@ var STATUS_FINISHED = 2;
 
 var MongoClient = require('mongodb').MongoClient;
 var ObjectID = require('mongodb').ObjectID;
-var url = 'mongodb://localhost:27017/mastermind';
+var url = 'mongodb://localhost:27017/mastermind2';
 var db;
 var game;
+
+function newFilledArray(length, value) {
+  var arr = new Array(length);
+  for (var i = 0; i < length; i++) {
+    arr[i] = value;
+  }
+  return arr;
+}
 
 /* Connect to database. */
 router.use(function(req, res, next) {
@@ -25,8 +38,11 @@ router.use(function(req, res, next) {
 /* Get games list. */
 router.get('/', function(req, res) {
   db.collection("games").find({}).toArray(function (err, docs){
+    if (err) { db.close(); console.log(err.message); res.status(500).send(err.message); return }
+    
     for (var i = 0; i < docs.length; i++) {
       delete docs[i].secret; // Don't disclose secret.
+      delete docs[i].guesses; // Don't disclose guesses.
     }
   
     db.close();
@@ -47,7 +63,7 @@ router.put('/', function(req, res) {
     (typeof req.body.user != 'string') ||
     (!(/^\w+$/.test(req.body.user)))
   ) {
-    res.status(400).send('Bad Request\nBad user name ' + req.body.user);
+    res.status(400).send('Bad Request\nBad user name ' + req.body.user + '.');
     return;
   }
 
@@ -55,15 +71,20 @@ router.put('/', function(req, res) {
   game = {
     created: new Date(),
     creator: req.body.user,
-    colors: 8,
-    slots: 8,
-    players: [req.body.user],
-    secret: [],
+    players: newFilledArray(NUMBER_OF_PLAYERS, null),
+    colors: NUMBER_OF_COLORS,
+    slots: NUMBER_OF_SLOTS,
+    secret: new Array(NUMBER_OF_SLOTS),
     status: STATUS_WAITINGP2,
-    turn: 0,
-    guesses: [],
-    winner: ""
+    round: null,
+    guesses: null,
+    guessed: null,
+    winners: null
   };
+  
+  game.players[0] = req.body.user;
+  
+  // Generate secret.
   for (var i = 0; i < game.slots; i++) {
     game.secret[i] = Math.floor(Math.random() * game.colors);
   }
@@ -72,13 +93,14 @@ router.put('/', function(req, res) {
   db.collection('games').insertOne(
     game,
     function(err, r) {
-      if (err) { db.close(); console.log(err.message); res.status(500).send(err.message) ; return }
+      if (err) { db.close(); console.log(err.message); res.status(500).send(err.message); return }
       
+      db.close();
       // Return game data.
       game = r.ops[0];
       delete game.secret; // Don't disclose secret.
+      delete game.guesses; // Don't disclose guesses.
       res.send(game);
-      db.close();
     }
   );
 });
@@ -87,7 +109,7 @@ router.put('/', function(req, res) {
 router.use(/^\/([a-f0-9]{24})(\/.*)?$/, function(req, res, next) {
   db.collection('games').findOne({_id: new ObjectID(req.params[0])}, function(err, doc) {
     if (err) { db.close(); console.log(err.message); res.status(500).send(err.message) ; return }
-    if (!doc) { res.status(404).send(); return }
+    if (!doc) { res.status(404).send('Game not found.'); return }
 
     game = doc;
     next();
@@ -98,6 +120,9 @@ router.use(/^\/([a-f0-9]{24})(\/.*)?$/, function(req, res, next) {
 router.get('/:_id', function(req, res) {
   db.close();
   delete game.secret; // Don't disclose secret.
+  if (game.status == STATUS_ONGOING) {
+    delete game.guesses; // Don't disclose guesses while game is ongoing.
+  }
   
   // Avoid HTTP caching.
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate"); // HTTP 1.1.
@@ -107,51 +132,67 @@ router.get('/:_id', function(req, res) {
   res.send(game);
 });
 
-/* Join Player 2, start game. */
+/* Join player, start game. */
 router.put('/:_id/players', function(req, res) {
   // Check request data for errors.
   if (
     (typeof req.body.user != 'string') ||
     (!(/^\w+$/.test(req.body.user)))
   ) {
-    db.close();
-    res.status(400).send('Bad Request\nBad user name ' + req.body.user);
-    return;
+    db.close(); res.status(400).send('Bad Request\nBad user name ' + req.body.user + '.'); return;
   }
   
   // Player 2 can only join before the game starts.
   if (game.status != STATUS_WAITINGP2) {
-    db.close();
-    res.status(403).send('Forbidden\nGame already started.');
-    return;
+    db.close(); res.status(403).send('Forbidden\nGame already started.'); return;
   }
   
   // A player cannot join twice.
   if (game.players.indexOf(req.body.user) != -1) {
-    db.close();
-    res.status(403).send('Forbidden\n' + req.body.user + ' already joined.');
-    return;
+    db.close(); res.status(403).send('Forbidden\n' + req.body.user + ' already joined.'); return;
   }
   
   // Add player to game.
-  game.players.push(req.body.user);
+  game.players[game.players.indexOf(null)] = req.body.user;
   
-  // Start game.
-  game.status = STATUS_ONGOING;
-  game.turn = 1;
+  // Start game if all players joined.
+  if (game.players.indexOf(null) == -1) {
+    game.status = STATUS_ONGOING;
+    game.round = 1; // First round.
+    game.guesses = {};
+    game.guessed = {};
+    for (var i = 0; i < game.players.length; i++) {
+      var player = game.players[i];
+      game.guesses[player] = [];
+      game.guessed[player] = false;
+    }
+  }
   
   // Update game in database.
   db.collection('games').updateOne(
     { _id: new ObjectID(game._id) },
-    { $set: { players: game.players, status: game.status, turn: game.turn } },
+    { $set: {
+      players: game.players,
+      status: game.status,
+      round: game.round,
+      guesses: game.guesses,
+      guessed: game.guessed
+    }},
     function(err, r) {
-      if (err) { db.close(); console.log(err.message); res.status(500).send(err.message) ; return; }
-      if (!r.result.ok) { db.close(); res.status(500).send('Update error') ; return }
+      if (err) { db.close(); console.log(err.message); res.status(500).send(err.message); return }
+      if (!r.result.ok) { db.close(); res.status(500).send('Update error.') ; return }
       
+      db.close();
       // Return game data.
       delete game.secret; // Don't disclose secret.
+      if (game.status == STATUS_ONGOING) { // If game is ongoing, don't disclose other players' guesses.
+        for (var player in game.guesses) {
+          if (player != req.body.user) {
+            delete game.guesses[player];
+          }
+        }
+      }
       res.send(game);
-      db.close();
     }
   );
 });
@@ -163,9 +204,7 @@ router.put('/:_id/guesses', function(req, res) {
     (typeof req.body.user != 'string') ||
     (!(/^\w+$/.test(req.body.user)))
   ) {
-    db.close();
-    res.status(400).send('Bad Request\nBad user name ' + req.body.user);
-    return;
+    db.close(); res.status(400).send('Bad Request\nBad user name ' + req.body.user + '.'); return;
   }
   
   if (
@@ -173,33 +212,25 @@ router.put('/:_id/guesses', function(req, res) {
     (req.body.guess.constructor != Array) ||
     (req.body.guess.length != game.slots) ||
     (!req.body.guess.every(function(color) {
-      return (color == Math.floor(color)) && (color >= 0) && (color < game.colors)
+      return (typeof color == 'number') && (color == Math.floor(color)) && (color >= 0) && (color < game.colors)
     }))
   ) {
-    db.close();
-    res.status(400).send('Bad Request\nBad guess ' + req.body.guess);
-    return;
+    db.close(); res.status(400).send('Bad Request\nBad guess ' + req.body.guess + '.'); return;
   }
 
   // Players can only guess while the game is ongoing.
   if (game.status != STATUS_ONGOING) {
-    db.close();
-    res.status(403).send('Forbidden\nGame is not ongoing.');
-    return;
+    db.close(); res.status(403).send('Forbidden\nGame is not ongoing.'); return;
   }
 
   // Only previously joined players can guess.
   if (game.players.indexOf(req.body.user) == -1) {
-    db.close();
-    res.status(403).send('Forbidden\n' + req.body.user + ' not joined.');
-    return;
+    db.close(); res.status(403).send('Forbidden\n' + req.body.user + ' not joined.'); return;
   }
 
-  // A player can only guess in his own turn.
-  if (req.body.user != game.players[game.turn - 1]) {
-    db.close();
-    res.status(403).send('Forbidden\nNot ' + req.body.user + '\'s turn.');
-    return;
+  // A player can only guess once per round.
+  if (game.guessed[req.body.user]) {
+    db.close(); res.status(403).send('Forbidden\n' + req.body.user + ' has already guessed in the current round.'); return;
   }
 
   // Calculate feedback.
@@ -226,31 +257,55 @@ router.put('/:_id/guesses', function(req, res) {
   }
   
   // Record guess.
-  game.guesses.push({
-    player: req.body.user,
+  game.guesses[req.body.user][game.round - 1] = {
     guess: req.body.guess,
     feedback: feedback
-  });
+  };
+  game.guessed[req.body.user] = true;
   
-  // Check for victory.
-  if (feedback.correct == game.slots) {
-    game.status = STATUS_FINISHED;
-    game.winner = req.body.user;
-  } else {
-    game.turn = (game.turn == 1 ? 2 : 1);
+  // End of round if all players have guessed.
+  if (game.players.every(function(player) { return game.guessed[player] })) {
+    // Check for winning players.
+    for (var i = 0; i < game.players.length; i++) {
+      var player = game.players[i];
+      if (game.guesses[player][game.round - 1].feedback.correct == game.slots) {
+        game.status = STATUS_FINISHED;
+        (game.winners = game.winners || []).push(player);
+      }
+    }
+    // No victory yet, set up next round.
+    if (game.status != STATUS_FINISHED) {
+      game.round++;
+      for (var player in game.guessed) {
+        game.guessed[player] = false;
+      }
+    }
   }
 
   // Update game in database.
   db.collection('games').updateOne(
     { _id: new ObjectID(game._id) },
-    { $set: { guesses: game.guesses, status: game.status, winner: game.winner, turn: game.turn } },
+    { $set: {
+      status: game.status,
+      round: game.round,
+      guesses: game.guesses,
+      guessed: game.guessed,
+      winners: game.winners
+    }},
     function(err, r) {
-      if (err) { db.close(); console.log(err.message); res.status(500).send(err.message) ; return; }
-      if (!r.result.ok) { db.close(); res.status(500).send('Update error') ; return; }
+      if (err) { db.close(); console.log(err.message); res.status(500).send(err.message); return }
+      if (!r.result.ok) { db.close(); res.status(500).send('Update error.'); return }
       
       // Return game data.
       db.close();
       delete game.secret; // Don't disclose secret.
+      if (game.status == STATUS_ONGOING) { // If game is ongoing, don't disclose other players' guesses.
+        for (var player in game.guesses) {
+          if (player != req.body.user) {
+            delete game.guesses[player];
+          }
+        }
+      }
       res.send(game);
     }
   );

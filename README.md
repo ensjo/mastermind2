@@ -12,9 +12,9 @@ No logging-in/authentication method was implemented in this prototype.
 
 ### Response
 
-> {"_id":"5740bfd93e8709ac800687a7","created":"2016-05-21T20:06:49.184Z","creator":"ensjo","colors":8,"slots":8,"players":["ensjo"],"status":0,"turn":0,"guesses":[],"winner":""}
+> {"_id":"57422c6568c8bba318626b1d","created":"2016-05-22T22:02:13.141Z","creator":"ensjo","players":["ensjo",null],"colors":8,"slots":8,"status":0,"round":null,"guessed":null,"winners":null}
 
-Status = 0 means the game is still waiting for Player 2.
+Status = 0 means the game is still waiting for players to join.
 
 The secret code is created randomly. It's kept in the database, but is not disclosed.
 
@@ -29,33 +29,37 @@ So another player can find existing games to join.
 ### Response
 
 > [
->  {"_id":"5740bfd93e8709ac800687a7","created":"2016-05-21T20:06:49.184Z","creator":"ensjo","colors":8,"slots":8,"players":["ensjo"],"status":0,"turn":0,"guesses":[],"winner":""}
+>   {"_id":"57422c6568c8bba318626b1d","created":"2016-05-22T22:02:13.141Z","creator":"ensjo","players":["ensjo",null],"colors":8,"slots":8,"status":0,"round":null,"guessed":null,"winners":null}
 > ]
 
-## Join a game as Player 2
+## Join an existing game
 
 ### Request
 
-> PUT /games/5740bfd93e8709ac800687a7/players
+> PUT /games/57421b518f1f81a401f753f8/players
 > {"user":"zjan"}
 
 ### Response
 
-> {"_id":"5740bfd93e8709ac800687a7","created":"2016-05-21T20:06:49.184Z","creator":"ensjo","colors":8,"slots":8,"players":["ensjo","zjan"],"status":1,"turn":1,"guesses":[],"winner":""}
+> {"_id":"57422c6568c8bba318626b1d","created":"2016-05-22T22:02:13.141Z","creator":"ensjo","players":["ensjo","zjan"],"colors":8,"slots":8,"status":1,"round":1,"guesses":{"zjan":[]},"guessed":{"ensjo":false,"zjan":false},"winners":null}
 
-Game begins automatically (status = 1), and it's Player 1's turn (turn = 1).
+When all players have joined, the game begins automatically (status = 1) and are allowed to guess.
+
+While the game is ongoing, a player can only see his own guesses.
 
 ## Get a game from the database
 
-Player 1 must check this periodically to know when his game has started (status = 1). Both players can know when their turn has arrived.
+Players may check this URL periodically to check the game status and if they are allowed to guess.
 
 ### Request
 
-> GET /games/5740bfd93e8709ac800687a7
+> GET /games/57421b518f1f81a401f753f8
 
 ### Response
 
-> {"_id":"5740bfd93e8709ac800687a7","created":"2016-05-21T20:06:49.184Z","creator":"ensjo","colors":8,"slots":8,"players":["ensjo","zjan"],"status":1,"turn":1,"guesses":[],"winner":""}
+> {"_id":"57422c6568c8bba318626b1d","created":"2016-05-22T22:02:13.141Z","creator":"ensjo","players":["ensjo","zjan"],"colors":8,"slots":8,"status":1,"round":1,"guessed":{"ensjo":false,"zjan":false},"winners":null}
+
+While the game is ongoing, no guesses are not disclosed.
 
 ## Make a guess
 
@@ -68,21 +72,34 @@ A guess is provided as an array with integer numbers (0, 1, 2...) representing t
 
 ### Response
 
-> {"_id":"5740bfd93e8709ac800687a7","created":"2016-05-21T20:06:49.184Z","creator":"ensjo","colors":8,"slots":8,"players":["ensjo","zjan"],"status":1,"turn":2,"guesses":[{"player":"ensjo","guess":[0,1,2,3,4,5,6,7],"feedback":{"correct":3,"misplaced":3}}],"winner":""}
+> {"_id":"57422c6568c8bba318626b1d","created":"2016-05-22T22:02:13.141Z","creator":"ensjo","players":["ensjo","zjan"],"colors":8,"slots":8,"status":1,"round":1,"guesses":{"ensjo":[{"guess":[0,1,2,3,4,5,6,7],"feedback":{"correct":2,"misplaced":3}}]},"guessed":{"ensjo":true,"zjan":false},"winners":null}
 
-The user guess is recorded, feedback is calculated (correct = 3, misplaced = 3). Since the secret wasn't found yet, the turn passes to the other player (turn = 2).
+The user guess is recorded, feedback is calculated. 
 
-The game proceeds with the players making guesses and switching turns until one of them makes a correct guess.
+## Make a guess (end of round)
 
-## Make a (correct) guess
+When all players have guessed and nobody found the secret code, a new round begins.
 
 ### Request
 
 > PUT /games/5740bfd93e8709ac800687a7/guesses
-> {"user":"zjan","guess":[5,1,6,7,2,4,6,7]}
+> {"user":"zjan","guess":[7,6,5,4,3,2,1,0]}
 
 ### Response
 
-> {"_id":"5740bfd93e8709ac800687a7","created":"2016-05-21T20:06:49.184Z","creator":"ensjo","colors":8,"slots":8,"players":["ensjo","zjan"],"status":2,"turn":2,"guesses":[{"player":"ensjo","guess":[0,1,2,3,4,5,6,7],"feedback":{"correct":3,"misplaced":3}},{"player":"zjan","guess":[7,6,5,4,3,2,1,0],"feedback":{"correct":0,"misplaced":6}},{"player":"ensjo","guess":[0,1,2,3,0,1,2,3],"feedback":{"correct":1,"misplaced":1}},{"player":"zjan","guess":[4,5,6,7,4,5,6,7],"feedback":{"correct":4,"misplaced":2}},{"player":"ensjo","guess":[4,5,6,7,0,1,2,3],"feedback":{"correct":2,"misplaced":4}},{"player":"zjan","guess":[0,5,6,7,4,5,6,7],"feedback":{"correct":4,"misplaced":2}},{"player":"ensjo","guess":[4,1,6,7,4,5,6,7],"feedback":{"correct":5,"misplaced":2}},{"player":"zjan","guess":[4,1,2,7,4,5,6,7],"feedback":{"correct":4,"misplaced":3}},{"player":"ensjo","guess":[4,1,6,3,4,5,6,7],"feedback":{"correct":4,"misplaced":2}},{"player":"zjan","guess":[2,1,6,7,4,5,6,7],"feedback":{"correct":5,"misplaced":3}},{"player":"ensjo","guess":[4,1,6,7,5,2,6,7],"feedback":{"correct":5,"misplaced":3}},{"player":"zjan","guess":[5,1,6,7,2,4,6,7],"feedback":{"correct":8,"misplaced":0}}],"winner":"zjan"}
+> {"_id":"57422c6568c8bba318626b1d","created":"2016-05-22T22:02:13.141Z","creator":"ensjo","players":["ensjo","zjan"],"colors":8,"slots":8,"status":1,"round":2,"guesses":{"zjan":[{"guess":[7,6,5,4,3,2,1,0],"feedback":{"correct":1,"misplaced":4}}]},"guessed":{"ensjo":false,"zjan":false},"winners":null}
 
-The game ends (status = 2), the winner is set.
+The game proceeds with the players making guesses until one or both of them makes a correct guess.
+
+## Make a guess (end of game)
+
+### Request
+
+> PUT /games/5740bfd93e8709ac800687a7/guesses
+> {"user":"zjan","guess":[5,0,1,2,5,0,1,2]}
+
+### Response
+
+> {"_id":"57422c6568c8bba318626b1d","created":"2016-05-22T22:02:13.141Z","creator":"ensjo","players":["ensjo","zjan"],"colors":8,"slots":8,"status":2,"round":3,"guesses":{"ensjo":[{"guess":[0,1,2,3,4,5,6,7],"feedback":{"correct":2,"misplaced":3}},{"guess":[4,5,6,7,4,5,6,7],"feedback":{"correct":0,"misplaced":2}},{"guess":[5,0,2,3,5,0,1,2],"feedback":{"correct":8,"misplaced":0}}],"zjan":[{"guess":[7,6,5,4,3,2,1,0],"feedback":{"correct":1,"misplaced":4}},{"guess":[0,1,2,3,0,1,2,3],"feedback":{"correct":2,"misplaced":4}},{"guess":[5,0,1,2,5,0,1,2],"feedback":{"correct":6,"misplaced":1}}]},"guessed":{"ensjo":true,"zjan":true},"winners":["ensjo"]}
+
+The game ends (status = 2), the winner(s) is announced and all the guesses are disclosed.
